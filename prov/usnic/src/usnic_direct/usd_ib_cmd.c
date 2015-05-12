@@ -615,7 +615,7 @@ usd_ib_cmd_destroy_qp(
     return 0;
 }
 
-static int
+/* static */ int
 usd_ib_cmd_query_device(
     struct usd_device *dev,
     struct ibv_query_device_resp *irp)
@@ -644,7 +644,7 @@ usd_ib_cmd_query_device(
     return 0;
 }
 
-static int
+/* static */ int
 usd_ib_cmd_query_port(
     struct usd_device *dev,
     struct ibv_query_port_resp *irp)
