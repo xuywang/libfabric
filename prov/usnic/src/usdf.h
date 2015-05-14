@@ -43,6 +43,7 @@
 
 #include "usdf_progress.h"
 #include "usd.h"
+#include "fi_ext_usnic.h"
 
 
 #define USDF_PROV_NAME "usnic"
@@ -427,6 +428,9 @@ ssize_t usdf_eq_write_internal(struct usdf_eq *eq, uint32_t event,
 /* fi_ops_fabric */
 int usdf_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 	struct fid_domain **domain, void *context);
+int usdf_share_domain(struct fid_fabric *fabric, struct fi_info *info,
+			struct fi_usnic_shdom *shdom, uint64_t share_key,
+			struct fid_domain **domain, void *context);
 int usdf_eq_open(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 	struct fid_eq **eq, void *context);
 int usdf_pep_open(struct fid_fabric *fabric, struct fi_info *info,
@@ -453,3 +457,4 @@ void usdf_setup_fake_ibv_provider(void);
 int usdf_pep_steal_socket(struct usdf_pep *pep, int *is_bound, int *sock_o);
 
 #endif /* _USDF_H_ */
+
