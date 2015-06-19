@@ -952,7 +952,6 @@ verbs_compat_get_data_structure(uint8_t sub_op, void *context, void *out)
        struct ibv_device_attr device_attr;
        struct ibv_port_attr port_attr;
        struct usdf_fabric *fp;
-       struct usdf_domain *dom;
        struct usd_device_attrs *dap;
        struct usd_device *dev;
        struct ibv_query_device_resp dresp;
@@ -967,10 +966,14 @@ verbs_compat_get_data_structure(uint8_t sub_op, void *context, void *out)
                return -EINVAL;
        }
 
-       dom = (struct usdf_domain*)context;
-       fp = dom->dom_fabric;
-       dap = fp->fab_dev_attrs;
-       dev = dom->dom_dev;
+	fp = fab_ftou((struct fid_fabric*)context);
+	dap = fp->fab_dev_attrs;
+	ret = usd_open_for_attrs(fp->fab_attr.name, &dev);
+	if (ret != 0 ) {
+		USDF_WARN("Failed to open usd device for %s ret: %d\n",
+			fp->fab_attr.name, ret);
+		return ret;
+	}
 
         if (!fp || !dap || !dev) {
                 fprintf(stderr, "\n%s - Unable to get fab_dev_attrs from usdf_fabric\n", __FUNCTION__);
