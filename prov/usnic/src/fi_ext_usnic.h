@@ -88,6 +88,8 @@ struct fi_usnic_ops_fabric {
 	int (*share_domain)(struct fid_fabric *fabric, struct fi_info *info,
 				struct fi_usnic_shdom *shdom, uint64_t share_key,
 				struct fid_domain **domain, void *context);
+	int (*insert_av)(uint8_t hint_ver, void *hint_data, void *context,
+			 void *fi_addr);
 };
 
 enum verbs_compat_op {
