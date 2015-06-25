@@ -1114,13 +1114,77 @@ usdf_verbs_compat(uint8_t op, uint8_t sub_op, void *context, void *out)
        return 0;
 }
 
+enum av_hint_version {
+	AV_HINT_V1 = 0, /* The input is a full dgid (16 bytes) */
+	__AV_HINT_VMAX,
+};
+#define AV_HINT_VMAX (__AV_HINT_VMAX - 1)
 
+struct av_hint_v1 {
+	uint8_t dst_mac[ETH_ALEN];
+	uint32_t dst_ip;
+};
+
+static int
+usdf_insert_av(uint8_t hint_ver, void *hint_data, void *context, void *fi_addr)
+{
+	struct usdf_domain *dom;
+	struct usd_device *dev;
+	int ret;
+	union ibv_gid *gid;
+	uint32_t ip;
+
+	if (hint_ver > AV_HINT_VMAX || !hint_data || !context) {
+		USDF_DBG("\n%s - wrong input (hint_ver=%u hint_data=%p context=%p)\n",
+			 __FUNCTION__, hint_ver, hint_data, context);
+		return -EINVAL;
+	}
+
+	dom = (struct usdf_domain*)context;
+	dev = dom->dom_dev;
+	if (!dev) {
+		USDF_DBG("\n%s - BUG: dom->dom_dev is not initialized\n", __FUNCTION__);
+		return -EINVAL;
+	}
+
+	switch(hint_ver) {
+	case AV_HINT_V1:
+		gid = (union ibv_gid *)hint_data;
+		USDF_DBG("\n%s - Received hints: %x:%x %x:%x IP=%d.%d.%d.%d MAC=%x:%x:%x:%x:%x:%x:%x:%x\n",
+			__FUNCTION__,
+			(int)gid->raw[0], (int)gid->raw[1],
+			(int)gid->raw[2], (int)gid->raw[3],
+			(int)gid->raw[4], (int)gid->raw[5],
+			(int)gid->raw[6], (int)gid->raw[7],
+			(int)gid->raw[8], (int)gid->raw[9],
+			(int)gid->raw[10], (int)gid->raw[11],
+			(int)gid->raw[12], (int)gid->raw[13],
+			(int)gid->raw[14], (int)gid->raw[15]);
+
+		/* eliminate breaking strict-aliasing rule warning */
+		memcpy(&ip, &gid->raw[4], sizeof(ip));
+		ret = usd_create_dest_with_mac(dev,
+					       ip, // dst_ip,
+					       0,
+					       &gid->raw[8], // dst_mac,
+					       fi_addr);
+		if (ret) {
+			USDF_DBG("\n%s - usd_create_dest_with_mac failed (ret=%d)\n",
+				 __FUNCTION__, ret);
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
 
 static struct fi_usnic_ops_fabric usdf_usnic_ops_fabric = {
 	.size = sizeof(struct fi_usnic_ops_fabric),
         .getinfo = usdf_usnic_getinfo,
         .verbs_compat = usdf_verbs_compat,
 	.share_domain = usdf_share_domain,
+	.insert_av = usdf_insert_av,
 };
 
 static int
