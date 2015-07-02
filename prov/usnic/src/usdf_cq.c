@@ -56,6 +56,7 @@
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_errno.h>
+#include "fi_ext_usnic.h"
 #include "fi.h"
 #include "fi_enosys.h"
 
@@ -1017,8 +1018,22 @@ usdf_cq_process_attr(struct fi_cq_attr *attr, struct usdf_domain *udp)
 int
 usdf_cq_create_cq(struct usdf_cq *cq)
 {
-	return usd_create_cq(cq->cq_domain->dom_dev, cq->cq_attr.size, -1,
-			&cq->c.hard.cq_cq);
+       int comp_channel_fd = -1;
+       int comp_vec = -1;
+       struct fi_usnic_comp_channel *comp_channel;
+
+       if(cq->cq_attr.wait_set) {
+               comp_channel = (struct fi_usnic_comp_channel *)cq->cq_attr.wait_set;
+               if (comp_channel->fid.fclass == FI_USNIC_CLASS_COMP_CHANNEL) {
+                       comp_channel_fd = comp_channel->comp_channel_fd;
+                       comp_vec = cq->cq_attr.signaling_vector;
+               }
+       }
+
+       return usd_create_cq_with_cv(cq->cq_domain->dom_dev, cq->cq_attr.size,
+                                    comp_channel_fd,
+                                    comp_vec, &cq->c.hard.cq_cq);
+
 }
 
 int

@@ -50,6 +50,9 @@
 #define FI_PROTO_RUDP 100
 
 #define FI_EXT_USNIC_INFO_VERSION 1
+#define FI_USNIC_CLASS_COMP_CHANNEL (FI_PROV_SPECIFIC | (1<<29))
+#define FI_USNIC_CLASS_CTX_FD (FI_PROV_SPECIFIC | (1 << 30))
+
 
 /*
  * usNIC specific info
@@ -73,6 +76,11 @@ struct fi_usnic_info {
 
 struct fi_usnic_shdom {
 	uint32_t handle;
+};
+
+struct fi_usnic_comp_channel {
+	struct fid fid;
+	int comp_channel_fd;
 };
 
 /*
