@@ -357,9 +357,12 @@ int usd_create_cq(struct usd_device *dev, unsigned num_cqe,
  *   comp_vec - value in the range of 0..uda_num_comp_vectors-1 indicating which
  *              underlying completion vector should be used for signaling
  *              comp_fd, or -1 for "don't care"
+ *   ibv_cq - The pointer of ibv_cq if verbs layer is implemented on top
+ *	      needed for passing correct correct user cq pointer to kernel
  */
 int usd_create_cq_with_cv(struct usd_device *dev, unsigned num_entries,
-                          int comp_fd, int comp_vec, struct usd_cq **cq_o);
+                          int comp_fd, int comp_vec, void *ibv_cq,
+				struct usd_cq **cq_o);
 
 int usd_destroy_cq(struct usd_cq *cq);
 

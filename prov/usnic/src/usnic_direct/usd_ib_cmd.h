@@ -55,7 +55,7 @@ int usd_ib_cmd_reg_mr_v1(struct usd_device *dev, void *vaddr, size_t length,
                         uint32_t queue_index, struct usd_mr *mr);
 int usd_ib_cmd_dereg_mr(struct usd_device *dev, struct usd_mr *mr);
 int usd_ib_cmd_create_cq(struct usd_device *dev, struct usd_cq_impl *cq,
-                         int comp_channel, int comp_vector);
+                        void *ibv_cq, int comp_channel, int comp_vector);
 int usd_ib_cmd_destroy_cq(struct usd_device *dev, struct usd_cq_impl *cq);
 int usd_ib_cmd_create_qp(struct usd_device *dev, struct usd_qp_impl *qp,
                          struct usd_vf_info *vfip);

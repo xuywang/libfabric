@@ -683,6 +683,7 @@ usd_create_cq_with_cv(
     unsigned num_entries,
     int comp_fd,
     int comp_vec,
+    void *ibv_cq,
     struct usd_cq **cq_o)
 {
     unsigned qp_per_vf;
@@ -740,7 +741,7 @@ usd_create_cq_with_cv(
     if (comp_vec < 0)
         comp_vec = 0;
 
-    ret = usd_ib_cmd_create_cq(dev, cq, comp_fd, comp_vec);
+    ret = usd_ib_cmd_create_cq(dev, cq, ibv_cq, comp_fd, comp_vec);
     if (ret != 0)
         goto out;
 
@@ -749,6 +750,8 @@ usd_create_cq_with_cv(
     /* initialize polling variables */
     cq->ucq_cqe_mask = num_entries - 1;
     cq->ucq_color_shift = msbit(num_entries) - 1;
+    cq->comp_fd = comp_fd;
+    cq->comp_vec = comp_vec;
 
     ucq = to_usdcq(cq);
     ucq->ucq_num_entries = num_entries - 1;
@@ -769,7 +772,7 @@ usd_create_cq(
     int comp_fd,
     struct usd_cq **cq_o)
 {
-    return usd_create_cq_with_cv(dev, num_entries, comp_fd, -1, cq_o);
+    return usd_create_cq_with_cv(dev, num_entries, comp_fd, -1, NULL, cq_o);
 }
 
 /*
@@ -831,11 +834,16 @@ usd_finish_create_cq(
         unsigned int cq_head = 0;
         unsigned int cq_tail = 0;
         unsigned int cq_tail_color = 1;
-        unsigned int cq_intr_enable = 0;
         unsigned int cq_entry_enable = 1;
         unsigned int cq_msg_enable = 0;
+        unsigned int cq_intr_enable = 0;
         unsigned int cq_intr_offset = 0;
         uint64_t cq_msg_addr = 0;
+
+        if (cq->comp_fd != -1) {
+            cq_intr_enable = 1;
+            cq_intr_offset = cq->intr_offset;
+        }
 
         cq->ucq_vnic_cq.ring.base_addr = (uintptr_t)cq->ucq_desc_ring_iova;
         cq->ucq_vnic_cq.ring.desc_count = cq->ucq_num_entries;

@@ -81,6 +81,7 @@ struct fi_usnic_shdom {
 struct fi_usnic_comp_channel {
 	struct fid fid;
 	int comp_channel_fd;
+	void *ibv_cq;
 };
 
 /*

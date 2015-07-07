@@ -475,6 +475,7 @@ int
 usd_ib_cmd_create_cq(
     struct usd_device *dev,
     struct usd_cq_impl *cq,
+    void *ibv_cq,
     int comp_channel,
     int comp_vector)
 {
@@ -493,7 +494,10 @@ usd_ib_cmd_create_cq(
     icp->out_words = sizeof(resp) / 4;
     icp->response = (uintptr_t) & resp;
 
-    icp->user_handle = (uintptr_t) cq;
+    if (ibv_cq == NULL)
+        icp->user_handle = (uintptr_t) cq;
+    else
+        icp->user_handle = (uintptr_t) ibv_cq;  /* Need to pass ibv_cq for usdfv */
     icp->cqe = cq->ucq_num_entries;
     icp->comp_channel = comp_channel;
     icp->comp_vector = comp_vector;
@@ -705,6 +709,14 @@ usd_ib_cmd_create_qp(
         usd_err("unexpected cmd_version (%u)\n", urp->cmd_version);
         ret = -ENXIO;
         goto out;
+    }
+
+    /* version 2 and beyond has interrupt support */
+    if (urp->cmd_version > 1) {
+        qp->uq_rq.urq_cq->intr_offset = urp->u.cur.rcq_intr_offset;
+        if (qp->uq_rq.urq_cq != qp->uq_wq.uwq_cq) {
+            qp->uq_wq.uwq_cq->intr_offset = urp->u.cur.wcq_intr_offset;
+        }
     }
 
     free(resources);

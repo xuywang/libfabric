@@ -190,6 +190,10 @@ struct usd_cq_impl {
     uint32_t ucq_color_shift;
     uint32_t ucq_handle;
 
+    int comp_fd;
+    int comp_vec;
+    uint32_t intr_offset;
+
     struct usd_rq **ucq_rq_map;
     struct usd_wq **ucq_wq_map;
 };
