@@ -335,5 +335,5 @@ pci_name(
 
     dev = (struct usd_device *) pdev;
 
-    return dev->ud_ib_dev->id_usnic_name;
+    return dev->ud_ctx->ucx_ib_dev->id_usnic_name;
 }

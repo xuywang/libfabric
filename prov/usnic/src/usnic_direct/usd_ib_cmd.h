@@ -46,7 +46,7 @@
 #include "usd.h"
 #include <infiniband/kern-abi.h>
 
-int usd_ib_cmd_get_context(struct usd_device *dev);
+int usd_ib_cmd_get_context(struct usd_context *uctx);
 int usd_ib_cmd_alloc_pd(struct usd_device *dev, uint32_t * pd_handle_o);
 int usd_ib_cmd_reg_mr(struct usd_device *dev, void *vaddr, size_t length,
                         struct usd_mr *mr);

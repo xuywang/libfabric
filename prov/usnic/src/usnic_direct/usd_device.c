@@ -114,7 +114,7 @@ usd_map_iova_space(struct usd_device *dev, void **iova_start_o)
          */
         offset = USNIC_ENCODE_PGOFF(0, USNIC_MMAP_IOVA, 0);
         iova_start = mmap64(NULL, USD_IOVA_VMA_SIZE, PROT_READ + PROT_WRITE,
-                            MAP_SHARED, dev->ud_ib_dev_fd, offset);
+                            MAP_SHARED, dev->ud_ctx->ucx_ib_dev_fd, offset);
         if (iova_start == MAP_FAILED) {
             usd_err("Failed to map shared PD translation address space\n");
             pthread_mutex_unlock(&iova_vma.mutex);
@@ -221,12 +221,11 @@ out:
  * Allocate a context from the driver
  */
 static int
-usd_get_context(
-    struct usd_device *dev)
+usd_open_ibctx(struct usd_context *uctx)
 {
     int ret;
 
-    ret = usd_ib_cmd_get_context(dev);
+    ret = usd_ib_cmd_get_context(uctx);
     return ret;
 }
 
@@ -278,6 +277,176 @@ usd_discover_device_attrs(
     return 0;
 }
 
+static void
+usd_dev_free(struct usd_device *dev)
+{
+    if (dev->ud_arp_sockfd != -1)
+         close(dev->ud_arp_sockfd);
+
+    if (dev->ud_ctx != NULL &&
+            (dev->ud_flags & USD_DEVF_CLOSE_CTX)) {
+        usd_close_context(dev->ud_ctx);
+    }
+    free(dev);
+}
+
+/*
+ * Allocate a usd_device without allocating a PD
+ */
+static int
+usd_dev_alloc_init(struct usd_context *context, const char *dev_name, int cmd_fd,
+                    int check_ready, struct usd_device **dev_o)
+{
+    struct usd_device *dev = NULL;
+    int ret;
+
+    dev = calloc(sizeof(*dev), 1);
+    if (dev == NULL) {
+        ret = -errno;
+        goto out;
+    }
+
+    dev->ud_flags = 0;
+    if (context == NULL) {
+        ret = usd_open_context(dev_name, cmd_fd, &dev->ud_ctx);
+        if (ret != 0) {
+            goto out;
+        }
+        dev->ud_flags |= USD_DEVF_CLOSE_CTX;
+    } else {
+        dev->ud_ctx = context;
+    }
+
+    dev->ud_arp_sockfd = -1;
+
+    TAILQ_INIT(&dev->ud_pending_reqs);
+    TAILQ_INIT(&dev->ud_completed_reqs);
+
+    if (context == NULL)
+        ret = usd_discover_device_attrs(dev, dev_name);
+    else
+        ret = usd_discover_device_attrs(dev, context->ucx_ib_dev->id_usnic_name);
+    if (ret != 0)
+        goto out;
+
+    dev->ud_attrs.uda_event_fd = dev->ud_ctx->event_fd;
+    dev->ud_attrs.uda_num_comp_vectors = dev->ud_ctx->num_comp_vectors;
+
+    if (check_ready) {
+        ret = usd_device_ready(dev);
+        if (ret != 0) {
+            goto out;
+        }
+    }
+
+    *dev_o = dev;
+    return 0;
+
+out:
+    if (dev != NULL)
+        usd_dev_free(dev);
+    return ret;
+}
+
+int
+usd_close_context(struct usd_context *ctx)
+{
+    /* XXX - verify all other resources closed out */
+    if (ctx->ucx_flags & USD_CTXF_CLOSE_CMD_FD)
+        close(ctx->ucx_ib_dev_fd);
+    if (ctx->ucmd_ib_dev_fd != -1)
+        close(ctx->ucmd_ib_dev_fd);
+
+    free(ctx);
+
+    return 0;
+}
+
+int
+usd_open_context(const char *dev_name, int cmd_fd,
+                struct usd_context **ctx_o)
+{
+    struct usd_context *ctx = NULL;
+    struct usd_ib_dev *idp;
+    int ret;
+
+    if (dev_name == NULL)
+        return -EINVAL;
+
+    ret = usd_init();
+    if (ret != 0) {
+        return ret;
+    }
+
+    /* Look for matching device */
+    idp = usd_ib_dev_list;
+    while (idp != NULL) {
+        if (dev_name == NULL || strcmp(idp->id_usnic_name, dev_name) == 0) {
+            break;
+        }
+        idp = idp->id_next;
+    }
+
+    /* not found, leave now */
+    if (idp == NULL) {
+        ret = -ENXIO;
+        goto out;
+    }
+
+    /*
+     * Found matching device, open an instance
+     */
+    ctx = calloc(sizeof(*ctx), 1);
+    if (ctx == NULL) {
+        ret = -errno;
+        goto out;
+    }
+    ctx->ucx_ib_dev_fd = -1;
+    ctx->ucmd_ib_dev_fd = -1;
+    ctx->ucx_flags = 0;
+
+    /* Save pointer to IB device */
+    ctx->ucx_ib_dev = idp;
+
+    /* Open the fd we will be using for IB commands */
+    if (cmd_fd == -1) {
+        ctx->ucx_ib_dev_fd = open(idp->id_dev_path, O_RDWR);
+        if (ctx->ucx_ib_dev_fd == -1) {
+            ret = -ENODEV;
+            goto out;
+        }
+        ctx->ucx_flags |= USD_CTXF_CLOSE_CMD_FD;
+    } else {
+        ctx->ucx_ib_dev_fd = cmd_fd;
+    }
+
+    /*
+     * Open another fd to send encapsulated user commands through
+     * CMD_GET_CONTEXT call. The reason to open an additional fd is
+     * that ib core does not allow multiple get_context call on one
+     * file descriptor.
+     */
+    ctx->ucmd_ib_dev_fd = open(idp->id_dev_path, O_RDWR | O_CLOEXEC);
+    if (ctx->ucmd_ib_dev_fd == -1) {
+        ret = -ENODEV;
+        goto out;
+    }
+
+    /* allocate a context from driver */
+    ret = usd_open_ibctx(ctx);
+    if (ret != 0) {
+        goto out;
+    }
+
+    *ctx_o = ctx;
+    return 0;
+
+out:
+    if (ctx != NULL)
+        usd_close_context(ctx);
+    return ret;
+}
+
 /*
  * Close a raw USNIC device
  */
@@ -288,16 +457,7 @@ usd_close(
     usd_unmap_iova_space(dev);
 
     TAILQ_REMOVE(&usd_device_list, dev, ud_link);
-
-    /* XXX - verify all other resources closed out */
-    if (dev->ud_flags & USD_DEVF_CLOSE_CMD_FD)
-        close(dev->ud_ib_dev_fd);
-    if (dev->ucmd_ib_dev_fd != -1)
-        close(dev->ucmd_ib_dev_fd);
-    if (dev->ud_arp_sockfd != -1)
-        close(dev->ud_arp_sockfd);
-
-    free(dev);
+    usd_dev_free(dev);
 
     return 0;
 }
@@ -325,101 +485,26 @@ usd_open_for_attrs(
 }
 
 /*
- * Open a raw USNIC device
+ * previous generic usd open function, used by libusnic_verbs_d
  */
 int
 usd_open_with_fd(
     const char *dev_name,
     int cmd_fd,
     int check_ready,
-    int alloc_vf,
+    int alloc_pd,
     struct usd_device **dev_o)
 {
-    struct usd_ib_dev *idp;
     struct usd_device *dev = NULL;
     int ret;
 
-    ret = usd_init();
-    if (ret != 0) {
-        return ret;
-    }
-
-    /* Look for matching device */
-    idp = usd_ib_dev_list;
-    while (idp != NULL) {
-        if (dev_name == NULL || strcmp(idp->id_usnic_name, dev_name) == 0) {
-            break;
-        }
-        idp = idp->id_next;
-    }
-
-    /* not found, leave now */
-    if (idp == NULL) {
-        ret = -ENXIO;
-        goto out;
-    }
-
-    /*
-     * Found matching device, open an instance
-     */
-    dev = calloc(sizeof(*dev), 1);
-    if (dev == NULL) {
-        ret = -errno;
-        goto out;
-    }
-    dev->ud_ib_dev_fd = -1;
-    dev->ucmd_ib_dev_fd = -1;
-    dev->ud_arp_sockfd = -1;
-    dev->ud_flags = 0;
-    TAILQ_INIT(&dev->ud_pending_reqs);
-    TAILQ_INIT(&dev->ud_completed_reqs);
-
-    /* Save pointer to IB device */
-    dev->ud_ib_dev = idp;
-
-    /* Open the fd we will be using for IB commands */
-    if (cmd_fd == -1) {
-        dev->ud_ib_dev_fd = open(idp->id_dev_path, O_RDWR);
-        if (dev->ud_ib_dev_fd == -1) {
-            ret = -ENODEV;
-            goto out;
-        }
-        dev->ud_flags |= USD_DEVF_CLOSE_CMD_FD;
-    } else {
-        dev->ud_ib_dev_fd = cmd_fd;
-    }
-
-    /*
-     * Open another fd to send encapsulated user commands through
-     * CMD_GET_CONTEXT call. The reason to open an additional fd is
-     * that ib core does not allow multiple get_context call on one
-     * file descriptor.
-     */
-    dev->ucmd_ib_dev_fd = open(idp->id_dev_path, O_RDWR | O_CLOEXEC);
-    if (dev->ucmd_ib_dev_fd == -1) {
-        ret = -ENODEV;
-        goto out;
-    }
-
-    /* allocate a context from driver */
-    ret = usd_get_context(dev);
+    ret = usd_dev_alloc_init(NULL, dev_name, cmd_fd, check_ready, &dev);
     if (ret != 0) {
         goto out;
     }
 
-    if (alloc_vf) {
+    if (alloc_pd) {
         ret = usd_ib_cmd_alloc_pd(dev, &dev->ud_pd_handle);
-        if (ret != 0) {
-            goto out;
-        }
-    }
-
-    ret = usd_discover_device_attrs(dev, dev_name);
-    if (ret != 0)
-        goto out;
-
-    if (check_ready) {
-        ret = usd_device_ready(dev);
         if (ret != 0) {
             goto out;
         }
@@ -427,18 +512,43 @@ usd_open_with_fd(
 
     TAILQ_INSERT_TAIL(&usd_device_list, dev, ud_link);
     *dev_o = dev;
-
     return 0;
 
-  out:
-    if (dev != NULL) {
-        if (dev->ud_flags & USD_DEVF_CLOSE_CMD_FD
-            && dev->ud_ib_dev_fd != -1)
-            close(dev->ud_ib_dev_fd);
-        if (dev->ucmd_ib_dev_fd != -1)
-            close(dev->ucmd_ib_dev_fd);
-        free(dev);
+out:
+    if (dev != NULL)
+        usd_dev_free(dev);
+    return ret;
+}
+
+/*
+ * Generic usd device open function, used by libfabric for libusnic_verbs_f
+ */
+int
+usd_open_with_ctx(struct usd_context *context, int alloc_pd, int check_ready,
+                    struct usd_device **dev_o)
+{
+    struct usd_device *dev = NULL;
+    int ret;
+
+    ret = usd_dev_alloc_init(context, NULL, -1, check_ready, &dev);
+    if (ret != 0) {
+        goto out;
     }
+
+    if (alloc_pd) {
+        ret = usd_ib_cmd_alloc_pd(dev, &dev->ud_pd_handle);
+        if (ret != 0) {
+            goto out;
+        }
+    }
+
+    TAILQ_INSERT_TAIL(&usd_device_list, dev, ud_link);
+    *dev_o = dev;
+    return 0;
+
+out:
+    if (dev != NULL)
+        usd_dev_free(dev);
     return ret;
 }
 
@@ -513,69 +623,17 @@ int usd_alloc_shpd(struct usd_device *dev, uint64_t share_key,
     return 0;
 }
 
-int usd_open_with_shpd(const char *dev_name, int cmd_fd,
-                        uint32_t shpd_handle, uint64_t share_key,
-                        struct usd_device **dev_o)
+int usd_open_with_shpd(struct usd_context *context, uint32_t shpd_handle,
+                        uint64_t share_key, struct usd_device **dev_o)
 {
-    /* copy most of code in usd_open_with_fd for now */
-    struct usd_ib_dev *idp;
     struct usd_device *dev = NULL;
     int ret;
 
-    ret = usd_init();
-    if (ret != 0) {
-        return ret;
-    }
-
-    /* Look for matching device */
-    idp = usd_ib_dev_list;
-    while (idp != NULL) {
-        if (dev_name == NULL || strcmp(idp->id_usnic_name, dev_name) == 0) {
-            break;
-        }
-        idp = idp->id_next;
-    }
-
-    /* not found, leave now */
-    if (idp == NULL) {
-        ret = -ENXIO;
-        goto out;
-    }
-
-    /*
-     * Found matching device, open an instance
-     */
-    dev = calloc(sizeof(*dev), 1);
-    if (dev == NULL) {
-        ret = -errno;
-        goto out;
-    }
-    dev->ud_ib_dev_fd = -1;
-    dev->ud_arp_sockfd = -1;
-    dev->ud_flags = 0;
-    TAILQ_INIT(&dev->ud_pending_reqs);
-    TAILQ_INIT(&dev->ud_completed_reqs);
-
-    /* Save pointer to IB device */
-    dev->ud_ib_dev = idp;
-
-    /* Open the fd we will be using for IB commands */
-    if (cmd_fd == -1) {
-        dev->ud_ib_dev_fd = open(idp->id_dev_path, O_RDWR);
-        if (dev->ud_ib_dev_fd == -1) {
-            ret = -ENODEV;
-            goto out;
-        }
-        dev->ud_flags |= USD_DEVF_CLOSE_CMD_FD;
-    } else {
-        dev->ud_ib_dev_fd = cmd_fd;
-    }
-
-    /* allocate a context from driver */
-    ret = usd_get_context(dev);
+    ret = usd_dev_alloc_init(context, NULL, -1, 1, &dev);
     if (ret != 0) {
         goto out;
     }
+
     /* Assign the default PD to the pd returned from kernel share_pd call */
     ret = usd_ib_cmd_share_pd(dev, shpd_handle, share_key, &dev->ud_pd_handle);
     if (ret != 0) {
@@ -583,27 +641,14 @@ int usd_open_with_shpd(const char *dev_name, int cmd_fd,
     }
     dev->is_pd_shared = 1;
 
-    ret = usd_discover_device_attrs(dev, dev_name);
-    if (ret != 0)
-        goto out;
-
-    ret = usd_device_ready(dev);
-    if (ret != 0) {
-        goto out;
-    }
-
     TAILQ_INSERT_TAIL(&usd_device_list, dev, ud_link);
     *dev_o = dev;
 
     return 0;
 
-  out:
-    if (dev != NULL) {
-        if (dev->ud_flags & USD_DEVF_CLOSE_CMD_FD
-            && dev->ud_ib_dev_fd != -1)
-            close(dev->ud_ib_dev_fd);
-        free(dev);
-    }
+out:
+    if (dev != NULL)
+        usd_dev_free(dev);
     return ret;
 }
 
@@ -614,7 +659,8 @@ int usd_alloc_shpd(struct usd_device *dev __attribute__((__unused__)),
     return -1;
 }
 
-int usd_open_with_shpd(const char *dev_name __attribute__((__unused__)),
+int usd_open_with_shpd(struct usd_context *context __attribute__((__unused__)),
+                        const char *dev_name __attribute__((__unused__)),
                         int cmd_fd __attribute__((__unused__)),
                         uint32_t shpd_handle __attribute__((__unused__)),
                         uint64_t share_key __attribute__((__unused__)),
