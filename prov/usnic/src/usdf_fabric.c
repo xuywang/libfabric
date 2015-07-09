@@ -914,6 +914,9 @@ usdf_fabric_close(fid_t fid)
 	if (fp->fab_arp_sockfd != -1) {
 		close(fp->fab_arp_sockfd);
 	}
+	if (fp->usd_ctx != NULL) {
+		usd_close_context(fp->usd_ctx);
+	}
 
 	free(fp);
 	return 0;
@@ -1218,6 +1221,28 @@ static struct fi_ops_fabric usdf_ops_fabric = {
 	.wait_open = fi_no_wait_open,
 };
 
+/*
+ * Allocate a USD context (open one verbs user context) if requested
+ * by applicaton
+ */
+static int
+usdf_fabric_open_ctx(struct fi_fabric_attr *fattrp, struct usdf_fabric *fp,
+			void *contxt)
+{
+	int cmd_fd;
+	int ret;
+
+	if (fattrp->fabric != NULL &&
+		fattrp->fabric->fid.fclass == FI_USNIC_CLASS_VERBS_CTX) {
+		cmd_fd = (int)(intptr_t)(fattrp->fabric->fid.context);
+		ret = usd_open_context(fattrp->name, cmd_fd, &fp->usd_ctx);
+		if (ret != 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int
 usdf_fabric_open(struct fi_fabric_attr *fattrp, struct fid_fabric **fabric,
 	       void *context)
@@ -1329,6 +1354,12 @@ usdf_fabric_open(struct fi_fabric_attr *fattrp, struct fid_fabric **fabric,
 	}
 
 	atomic_initialize(&fp->fab_refcnt, 0);
+
+	ret = usdf_fabric_open_ctx(fattrp, fp, context);
+	if (ret != 0) {
+		goto fail;
+	}
+
 	fattrp->fabric = fab_utof(fp);
 	fattrp->prov_version = USDF_PROV_VERSION;
 	*fabric = fab_utof(fp);

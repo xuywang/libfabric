@@ -128,6 +128,11 @@ struct usdf_fabric {
 	uint64_t fab_cur_bucket_ms;
 	uint32_t fab_cur_bucket;
 	pthread_spinlock_t fab_timer_lock;
+
+	/* usd object */
+	struct usd_context *usd_ctx;	/* used for opening a verbs context
+                                         * at fabric_open to support verbs
+                                         * plugin on top */
 };
 #define fab_ftou(FAB) container_of(FAB, struct usdf_fabric, fab_fid)
 #define fab_utof(FP) (&(FP)->fab_fid)

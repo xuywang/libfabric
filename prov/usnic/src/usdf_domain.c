@@ -386,17 +386,25 @@ usdf_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 	fp = fab_fidtou(fabric);
 
 	if ((info->caps & FI_USNIC_SKIP_HWALLOC) == 0) {
+		/*
 		if (info->handle && info->handle->fclass ==
 		    FI_USNIC_CLASS_CTX_FD) {
 			ret = usd_open_with_fd(fp->fab_dev_attrs->uda_devname,
 					       *(int *)info->handle->context,
                                                1, 1, &dom_dev);
+		*/
+		/* A context is opened already, allocate usd_device with
+		 * the existing context */
+		if (fp->usd_ctx != NULL) {
+			ret = usd_open_with_ctx(fp->usd_ctx, 1, 1, &dom_dev);
+
 		} else
 			ret = usd_open(fp->fab_dev_attrs->uda_devname, &dom_dev);
 	} else
 		ret = usd_open_for_attrs(fp->fab_dev_attrs->uda_devname,
 						&dom_dev);
 	if (ret != 0) {
+		USDF_WARN("usd_open failed, err %d\n", ret);
 		return ret;
 	}
 
@@ -417,17 +425,22 @@ usdf_share_domain(struct fid_fabric *fabric, struct fi_info *info,
 	struct usdf_fabric *fp;
 	struct usd_device *dom_dev;
 	int ret;
-	int fd = -1;
 
 	USDF_TRACE_SYS(DOMAIN, "\n");
 
 	fp = fab_fidtou(fabric);
+	/*
 	if (info->handle && info->handle->fclass == (FI_USNIC_CLASS_CTX_FD)) {
 		fd = *(int *)info->handle->context;
 	}
-	ret = usd_open_with_shpd(fp->fab_dev_attrs->uda_devname, fd,
-				shdom->handle, share_key,
-				&dom_dev);
+	*/
+
+	if (fp->usd_ctx == NULL) {
+		USDF_WARN("usd_ctx is not opened\n");
+		return -FI_EINVAL;
+	}
+	ret = usd_open_with_shpd(fp->usd_ctx, shdom->handle, share_key,
+					&dom_dev);
 	if (ret != 0) {
 		USDF_WARN("usd_open_with_shpd failed, err %d\n", ret);
 		return ret;
